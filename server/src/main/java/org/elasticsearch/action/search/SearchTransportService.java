@@ -339,6 +339,10 @@ public class SearchTransportService {
         boolean isScrollOrReindex = context.getRequest().scroll() != null
             || (shardFetchRequest.getShardSearchRequest() != null && shardFetchRequest.getShardSearchRequest().scroll() != null);
 
+        int minChunkedDocs = 50;
+        int requestedDocs = shardFetchRequest.docIds() == null ? 0 : shardFetchRequest.docIds().length;
+        boolean meetsMinChunkedDocs = requestedDocs >= minChunkedDocs;
+
         if (logger.isDebugEnabled()) {
             logger.debug(
                 "FetchSearchPhase decision for shard {}: chunkEnabled={}, "
@@ -360,7 +364,8 @@ public class SearchTransportService {
         // 2. Data node supports CHUNKED_FETCH_DOC_ID_ORDER transport version
         // 3. Not a cross-cluster search (CCS)
         // 4. Not a scroll or reindex operation
-        if (searchService.fetchPhaseChunked() && dataNodeSupports && isCCSQuery == false && isScrollOrReindex == false) {
+        if (searchService.fetchPhaseChunked() && dataNodeSupports && isCCSQuery == false && isScrollOrReindex == false
+            && meetsMinChunkedDocs) {
             // Route through local TransportFetchPhaseCoordinationAction
             shardFetchRequest.setCoordinatingNode(context.getSearchTransport().transportService().getLocalNode());
             shardFetchRequest.setCoordinatingTaskId(task.getId());
