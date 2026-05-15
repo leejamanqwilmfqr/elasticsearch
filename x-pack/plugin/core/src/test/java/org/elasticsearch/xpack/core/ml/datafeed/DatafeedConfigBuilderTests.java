@@ -10,6 +10,7 @@ import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.io.stream.Writeable;
+import org.elasticsearch.common.settings.SecureString;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.search.SearchModule;
@@ -21,6 +22,7 @@ import org.elasticsearch.search.aggregations.bucket.histogram.DateHistogramInter
 import org.elasticsearch.search.aggregations.metrics.MaxAggregationBuilder;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.test.AbstractWireSerializingTestCase;
+import org.elasticsearch.xpack.core.security.cloud.PersistedCloudCredential;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -116,7 +118,9 @@ public class DatafeedConfigBuilderTests extends AbstractWireSerializingTestCase<
         // with mismatched indicesOptions. project_routing is tested separately in dedicated tests.
 
         if (randomBoolean()) {
-            builder.setCloudInternalApiKey(randomAlphaOfLength(20));
+            builder.setCloudInternalCredential(
+                new PersistedCloudCredential(randomAlphaOfLength(10), new SecureString(randomAlphaOfLength(20).toCharArray()))
+            );
         }
 
         if (randomBoolean()) {

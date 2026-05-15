@@ -17,6 +17,7 @@ import org.elasticsearch.aggregations.AggregationsPlugin;
 import org.elasticsearch.aggregations.pipeline.DerivativePipelineAggregationBuilder;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
+import org.elasticsearch.common.settings.SecureString;
 import org.elasticsearch.common.io.stream.NamedWriteableAwareStreamInput;
 import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.io.stream.StreamInput;
@@ -57,6 +58,7 @@ import org.elasticsearch.xpack.core.ml.datafeed.ChunkingConfig.Mode;
 import org.elasticsearch.xpack.core.ml.job.messages.Messages;
 import org.elasticsearch.xpack.core.ml.utils.QueryProvider;
 import org.elasticsearch.xpack.core.ml.utils.ToXContentParams;
+import org.elasticsearch.xpack.core.security.cloud.PersistedCloudCredential;
 
 import java.io.IOException;
 import java.time.ZoneId;
@@ -1065,10 +1067,12 @@ public class DatafeedConfigTests extends AbstractBWCSerializationTestCase<Datafe
                 }
                 break;
             case 14:
-                if (instance.getCloudInternalApiKey() == null) {
-                    builder.setCloudInternalApiKey(randomAlphaOfLength(20));
+                if (instance.getCloudInternalCredential() == null) {
+                    builder.setCloudInternalCredential(
+                        new PersistedCloudCredential(randomAlphaOfLength(10), new SecureString(randomAlphaOfLength(20).toCharArray()))
+                    );
                 } else {
-                    builder.setCloudInternalApiKey(null);
+                    builder.setCloudInternalCredential(null);
                 }
                 break;
             default:
@@ -1083,8 +1087,8 @@ public class DatafeedConfigTests extends AbstractBWCSerializationTestCase<Datafe
         if (version.supports(DatafeedConfig.DATAFEED_PROJECT_ROUTING) == false) {
             builder.setProjectRouting(null);
         }
-        if (version.supports(TransportVersion.fromName("datafeed_cloud_internal_api_key")) == false) {
-            builder.setCloudInternalApiKey(null);
+        if (version.supports(DatafeedConfig.DATAFEED_CLOUD_INTERNAL_CREDENTIAL) == false) {
+            builder.setCloudInternalCredential(null);
         }
         return builder.build();
     }
@@ -1406,49 +1410,52 @@ public class DatafeedConfigTests extends AbstractBWCSerializationTestCase<Datafe
     }
 
     public void testCloudInternalApiKeyPersistedForInternalStorage() throws IOException {
+        PersistedCloudCredential cred = new PersistedCloudCredential("key-id", new SecureString("secret-value".toCharArray()));
         DatafeedConfig.Builder builder = new DatafeedConfig.Builder("test-datafeed", "test-job");
         builder.setIndices(List.of("logs-*"));
-        builder.setCloudInternalApiKey("test-encoded-api-key");
+        builder.setCloudInternalCredential(cred);
         DatafeedConfig config = builder.build();
 
-        assertThat(config.getCloudInternalApiKey(), equalTo("test-encoded-api-key"));
+        assertThat(config.getCloudInternalCredential(), equalTo(cred));
 
-        // Verify cloudInternalApiKey is written for internal storage
+        // Verify cloud_internal_credential is written for internal storage
         ToXContent.MapParams params = new ToXContent.MapParams(Collections.singletonMap(ToXContentParams.FOR_INTERNAL_STORAGE, "true"));
         BytesReference forClusterstateXContent = XContentHelper.toXContent(config, XContentType.JSON, params, false);
         XContentParser parser = parser(forClusterstateXContent);
         DatafeedConfig parsedConfig = DatafeedConfig.LENIENT_PARSER.apply(parser, null).build();
-        assertThat(parsedConfig.getCloudInternalApiKey(), equalTo("test-encoded-api-key"));
+        assertThat(parsedConfig.getCloudInternalCredential(), equalTo(cred));
 
-        // Verify cloudInternalApiKey is NOT written without FOR_INTERNAL_STORAGE
+        // Verify cloud_internal_credential is NOT written without FOR_INTERNAL_STORAGE
         BytesReference nonClusterstateXContent = XContentHelper.toXContent(config, XContentType.JSON, ToXContent.EMPTY_PARAMS, false);
         parser = parser(nonClusterstateXContent);
         parsedConfig = DatafeedConfig.LENIENT_PARSER.apply(parser, null).build();
-        assertThat(parsedConfig.getCloudInternalApiKey(), nullValue());
+        assertThat(parsedConfig.getCloudInternalCredential(), nullValue());
     }
 
     public void testCloudInternalApiKeyNullByDefault() {
         DatafeedConfig.Builder builder = new DatafeedConfig.Builder("test-datafeed", "test-job");
         builder.setIndices(List.of("logs-*"));
         DatafeedConfig config = builder.build();
-        assertThat(config.getCloudInternalApiKey(), nullValue());
+        assertThat(config.getCloudInternalCredential(), nullValue());
     }
 
     public void testCloudInternalApiKeyCopyConstructor() {
+        PersistedCloudCredential cred = new PersistedCloudCredential("key-id", new SecureString("api-key-value".toCharArray()));
         DatafeedConfig.Builder builder = new DatafeedConfig.Builder("test-datafeed", "test-job");
         builder.setIndices(List.of("logs-*"));
-        builder.setCloudInternalApiKey("api-key-value");
+        builder.setCloudInternalCredential(cred);
         DatafeedConfig original = builder.build();
 
         DatafeedConfig copy = new DatafeedConfig.Builder(original).build();
-        assertThat(copy.getCloudInternalApiKey(), equalTo("api-key-value"));
+        assertThat(copy.getCloudInternalCredential(), equalTo(cred));
         assertEquals(original, copy);
     }
 
     public void testCloudInternalApiKeySerialization() throws IOException {
+        PersistedCloudCredential cred = new PersistedCloudCredential("key-id", new SecureString("test-api-key-encoded".toCharArray()));
         DatafeedConfig.Builder builder = new DatafeedConfig.Builder("test-datafeed", "test-job");
         builder.setIndices(List.of("logs-*"));
-        builder.setCloudInternalApiKey("test-api-key-encoded");
+        builder.setCloudInternalCredential(cred);
         DatafeedConfig config = builder.build();
 
         BytesStreamOutput output = new BytesStreamOutput();
@@ -1459,7 +1466,7 @@ public class DatafeedConfigTests extends AbstractBWCSerializationTestCase<Datafe
         rawInput.setTransportVersion(TransportVersion.current());
         try (StreamInput input = new NamedWriteableAwareStreamInput(rawInput, getNamedWriteableRegistry())) {
             DatafeedConfig deserialized = new DatafeedConfig(input);
-            assertThat(deserialized.getCloudInternalApiKey(), equalTo("test-api-key-encoded"));
+            assertThat(deserialized.getCloudInternalCredential(), equalTo(cred));
             assertEquals(config, deserialized);
         }
     }

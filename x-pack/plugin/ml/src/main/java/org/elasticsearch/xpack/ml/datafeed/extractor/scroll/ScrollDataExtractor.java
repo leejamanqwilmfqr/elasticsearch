@@ -30,7 +30,6 @@ import org.elasticsearch.xpack.core.ClientHelper;
 import org.elasticsearch.xpack.core.ml.datafeed.SearchInterval;
 import org.elasticsearch.xpack.ml.datafeed.DatafeedTimingStatsReporter;
 import org.elasticsearch.xpack.ml.datafeed.LinkedClusterState;
-import org.elasticsearch.xpack.ml.datafeed.UiamCredentialManager;
 import org.elasticsearch.xpack.ml.datafeed.extractor.DataExtractor;
 import org.elasticsearch.xpack.ml.datafeed.extractor.DataExtractorUtils;
 import org.elasticsearch.xpack.ml.extractor.ExtractedField;
@@ -177,7 +176,7 @@ class ScrollDataExtractor implements DataExtractor {
     protected SearchResponse executeSearchRequest(ActionRequestBuilder<?, SearchResponse> searchRequestBuilder) {
         return checkForSkippedClusters(
             ClientHelper.executeWithHeaders(
-                UiamCredentialManager.headersForCpsSearch(context.queryContext.headers),
+                DataExtractorUtils.headersForCpsSearch(context.queryContext.headers),
                 ClientHelper.ML_ORIGIN,
                 client,
                 searchRequestBuilder::get

@@ -100,7 +100,7 @@ public class ScrollDataExtractorTests extends ESTestCase {
         }
 
         TestDataExtractor(ScrollDataExtractorContext context) {
-            super(client, context, timingStatsReporter);
+            super(client, context, timingStatsReporter, mock(ScrollDataExtractorFactory.class));
         }
 
         @Override

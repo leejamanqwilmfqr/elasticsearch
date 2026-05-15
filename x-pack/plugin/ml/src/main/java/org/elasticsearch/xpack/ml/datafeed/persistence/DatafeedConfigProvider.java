@@ -61,6 +61,7 @@ import org.elasticsearch.xpack.core.ml.job.config.Job;
 import org.elasticsearch.xpack.core.ml.utils.ExceptionsHelper;
 import org.elasticsearch.xpack.core.ml.utils.MlStrings;
 import org.elasticsearch.xpack.core.ml.utils.ToXContentParams;
+import org.elasticsearch.xpack.core.security.cloud.PersistedCloudCredential;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -371,53 +372,81 @@ public class DatafeedConfigProvider {
     }
 
     /**
-     * Patches the cloudInternalApiKey and headers on an existing datafeed config.
-     * Used for CPS migration during update when a legacy datafeed transitions to CPS.
-     * This loads the existing config, applies the patch, and re-indexes using optimistic concurrency.
-     *
-     * @param datafeedId           The datafeed ID to patch
-     * @param cloudInternalApiKey  The internal API key credential to set
-     * @param cpsHeaders           The CPS auth headers to set
-     * @param listener             Returns the patched config on success
+     * Updates an existing datafeed config, optionally patching in a new cloud credential in the same write.
+     * The {@code newCredential} replaces any existing credential stored in the config; pass {@code null} to leave
+     * the existing credential unchanged.
+     * <p>
+     * On success, the listener receives the persisted config and, when {@code newCredential} was non-null, the
+     * credential it replaced (for best-effort revocation); otherwise {@code null} in the second tuple position.
      */
-    public void patchCloudInternalApiKey(
+    public void updateDatefeedConfig(
         String datafeedId,
-        String cloudInternalApiKey,
-        Map<String, String> cpsHeaders,
-        ActionListener<DatafeedConfig> listener
+        DatafeedUpdate update,
+        Map<String, String> headers,
+        @Nullable PersistedCloudCredential newCredential,
+        BiConsumer<DatafeedConfig, ActionListener<Boolean>> validator,
+        ActionListener<Tuple<DatafeedConfig, PersistedCloudCredential>> updatedConfigListener
     ) {
         GetRequest getRequest = new GetRequest(MlConfigIndex.indexName(), DatafeedConfig.documentId(datafeedId));
 
-        executeAsyncWithOrigin(client, ML_ORIGIN, TransportGetAction.TYPE, getRequest, new DelegatingActionListener<>(listener) {
-            @Override
-            public void onResponse(GetResponse getResponse) {
-                if (getResponse.isExists() == false) {
-                    delegate.onFailure(ExceptionsHelper.missingDatafeedException(datafeedId));
-                    return;
-                }
-                final long seqNo = getResponse.getSeqNo();
-                final long primaryTerm = getResponse.getPrimaryTerm();
-                BytesReference source = getResponse.getSourceAsBytesRef();
-                DatafeedConfig.Builder configBuilder;
-                try {
-                    configBuilder = parseLenientlyFromSource(source);
-                } catch (IOException e) {
-                    delegate.onFailure(new ElasticsearchParseException("Failed to parse datafeed config [" + datafeedId + "]", e));
-                    return;
-                }
+        executeAsyncWithOrigin(
+            client,
+            ML_ORIGIN,
+            TransportGetAction.TYPE,
+            getRequest,
+            new DelegatingActionListener<>(updatedConfigListener) {
+                @Override
+                public void onResponse(GetResponse getResponse) {
+                    if (getResponse.isExists() == false) {
+                        delegate.onFailure(ExceptionsHelper.missingDatafeedException(datafeedId));
+                        return;
+                    }
+                    final long seqNo = getResponse.getSeqNo();
+                    final long primaryTerm = getResponse.getPrimaryTerm();
+                    BytesReference source = getResponse.getSourceAsBytesRef();
+                    DatafeedConfig.Builder configBuilder;
+                    try {
+                        configBuilder = parseLenientlyFromSource(source);
+                    } catch (IOException e) {
+                        delegate.onFailure(new ElasticsearchParseException("Failed to parse datafeed config [" + datafeedId + "]", e));
+                        return;
+                    }
 
-                configBuilder.setCloudInternalApiKey(cloudInternalApiKey);
-                if (cpsHeaders.isEmpty() == false) {
-                    configBuilder.setHeaders(ClientHelper.getPersistableSafeSecurityHeaders(cpsHeaders, clusterService.state()));
-                }
+                    final DatafeedConfig configAfterApply;
+                    try {
+                        configAfterApply = update.apply(configBuilder.build(), headers, clusterService.state());
+                    } catch (Exception e) {
+                        delegate.onFailure(e);
+                        return;
+                    }
 
-                DatafeedConfig patchedConfig = configBuilder.build();
-                indexUpdatedConfig(patchedConfig, seqNo, primaryTerm, delegate.delegateFailureAndWrap((l, indexResponse) -> {
-                    assert indexResponse.getResult() == DocWriteResponse.Result.UPDATED;
-                    l.onResponse(patchedConfig);
-                }));
+                    final DatafeedConfig configToPersist;
+                    final PersistedCloudCredential supersededCredential;
+                    if (newCredential != null) {
+                        supersededCredential = configAfterApply.getCloudInternalCredential();
+                        configToPersist = new DatafeedConfig.Builder(configAfterApply).setCloudInternalCredential(newCredential).build();
+                    } else {
+                        supersededCredential = null;
+                        configToPersist = configAfterApply;
+                    }
+
+                    validator.accept(
+                        configToPersist,
+                        delegate.delegateFailureAndWrap(
+                            (l, ok) -> indexUpdatedConfig(
+                                configToPersist,
+                                seqNo,
+                                primaryTerm,
+                                l.delegateFailureAndWrap((ll, indexResponse) -> {
+                                    assert indexResponse.getResult() == DocWriteResponse.Result.UPDATED;
+                                    ll.onResponse(Tuple.tuple(configToPersist, supersededCredential));
+                                })
+                            )
+                        )
+                    );
+                }
             }
-        });
+        );
     }
 
     private void indexUpdatedConfig(DatafeedConfig updatedConfig, long seqNo, long primaryTerm, ActionListener<DocWriteResponse> listener) {

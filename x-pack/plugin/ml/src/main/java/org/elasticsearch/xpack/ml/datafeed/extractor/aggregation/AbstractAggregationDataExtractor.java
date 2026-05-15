@@ -22,7 +22,6 @@ import org.elasticsearch.xpack.core.ml.datafeed.DatafeedConfigUtils;
 import org.elasticsearch.xpack.core.ml.datafeed.SearchInterval;
 import org.elasticsearch.xpack.ml.datafeed.DatafeedTimingStatsReporter;
 import org.elasticsearch.xpack.ml.datafeed.LinkedClusterState;
-import org.elasticsearch.xpack.ml.datafeed.UiamCredentialManager;
 import org.elasticsearch.xpack.ml.datafeed.extractor.DataExtractor;
 import org.elasticsearch.xpack.ml.datafeed.extractor.DataExtractorQueryContext;
 import org.elasticsearch.xpack.ml.datafeed.extractor.DataExtractorUtils;
@@ -157,7 +156,7 @@ abstract class AbstractAggregationDataExtractor implements DataExtractor {
         ActionRequestBuilder<SearchRequest, SearchResponse> searchRequestBuilder
     ) {
         SearchResponse searchResponse = ClientHelper.executeWithHeaders(
-            UiamCredentialManager.headersForCpsSearch(context.headers),
+            DataExtractorUtils.headersForCpsSearch(context.headers),
             ClientHelper.ML_ORIGIN,
             client,
             searchRequestBuilder::get
