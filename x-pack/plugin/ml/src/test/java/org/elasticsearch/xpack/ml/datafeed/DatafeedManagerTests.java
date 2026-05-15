@@ -24,6 +24,7 @@ import org.elasticsearch.xpack.core.ml.action.UpdateDatafeedAction;
 import org.elasticsearch.xpack.core.ml.datafeed.DatafeedConfig;
 import org.elasticsearch.xpack.core.ml.datafeed.DatafeedUpdate;
 import org.elasticsearch.xpack.core.security.authc.Authentication;
+import org.elasticsearch.xpack.core.security.authc.AuthenticationTestHelper;
 import org.elasticsearch.xpack.core.security.cloud.CloudCredential;
 import org.elasticsearch.xpack.core.security.cloud.CloudCredentialManager;
 import org.elasticsearch.xpack.core.security.cloud.InternalCloudApiKeyService;
@@ -62,11 +63,12 @@ public class DatafeedManagerTests extends ESTestCase {
     }
 
     private static void mockGrantSucceeds(InternalCloudApiKeyService apiKeyService, PersistedCloudCredential persisted) {
+        Authentication authentication = AuthenticationTestHelper.builder().build();
         doAnswer(invocation -> {
             @SuppressWarnings("unchecked")
             ActionListener<InternalCloudApiKeyService.CloudGrantApiKeyResult> listener = (ActionListener<
                 InternalCloudApiKeyService.CloudGrantApiKeyResult>) invocation.getArguments()[2];
-            listener.onResponse(new InternalCloudApiKeyService.CloudGrantApiKeyResult(persisted, mock(Authentication.class)));
+            listener.onResponse(new InternalCloudApiKeyService.CloudGrantApiKeyResult(persisted, authentication));
             return null;
         }).when(apiKeyService).grantCloudAuthentication(any(CloudCredential.class), anyString(), any());
     }
@@ -178,7 +180,8 @@ public class DatafeedManagerTests extends ESTestCase {
         );
 
         when(credentialManager.hasCloudManagedCredential(any())).thenReturn(true);
-        when(credentialManager.extractCloudManagedCredential(any())).thenReturn(mock(CloudCredential.class));
+        CloudCredential extractedCredential = new CloudCredential(new SecureString("test-token".toCharArray()));
+        when(credentialManager.extractCloudManagedCredential(any())).thenReturn(extractedCredential);
 
         PersistedCloudCredential persisted = new PersistedCloudCredential("new-key-id", new SecureString("secret".toCharArray()));
         mockGrantSucceeds(apiKeyService, persisted);
@@ -233,7 +236,8 @@ public class DatafeedManagerTests extends ESTestCase {
         );
 
         when(credentialManager.hasCloudManagedCredential(any())).thenReturn(true);
-        when(credentialManager.extractCloudManagedCredential(any())).thenReturn(mock(CloudCredential.class));
+        CloudCredential extractedCredential = new CloudCredential(new SecureString("test-token".toCharArray()));
+        when(credentialManager.extractCloudManagedCredential(any())).thenReturn(extractedCredential);
 
         PersistedCloudCredential persisted = new PersistedCloudCredential("update-key-id", new SecureString("secret".toCharArray()));
         mockGrantSucceeds(apiKeyService, persisted);
