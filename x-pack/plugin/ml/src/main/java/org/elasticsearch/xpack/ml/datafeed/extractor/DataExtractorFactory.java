@@ -18,6 +18,7 @@ import org.elasticsearch.xpack.core.ml.datafeed.DatafeedConfig;
 import org.elasticsearch.xpack.core.ml.job.config.Job;
 import org.elasticsearch.xpack.core.ml.utils.ExceptionsHelper;
 import org.elasticsearch.xpack.core.rollup.action.GetRollupIndexCapsAction;
+import org.elasticsearch.xpack.core.security.cloud.CloudCredentialsExtension;
 import org.elasticsearch.xpack.ml.datafeed.DatafeedTimingStatsReporter;
 import org.elasticsearch.xpack.ml.datafeed.extractor.aggregation.AggregatedSearchRequestBuilder;
 import org.elasticsearch.xpack.ml.datafeed.extractor.aggregation.AggregationDataExtractorFactory;
@@ -45,6 +46,12 @@ public interface DataExtractorFactory {
         DatafeedTimingStatsReporter timingStatsReporter,
         ActionListener<DataExtractorFactory> listener
     ) {
+        // If the datafeed has a persisted cloud credential, wrap the client so all searches are
+        // automatically authenticated with that credential via ThreadContext injection.
+        final Client searchClient = CloudCredentialsExtension.getInstance()
+            .credentialManager()
+            .wrapClient(client, datafeed.getCloudInternalCredential());
+
         final boolean hasAggs = datafeed.hasAggregations();
         final boolean isComposite = hasAggs && datafeed.hasCompositeAgg(xContentRegistry);
         ActionListener<DataExtractorFactory> factoryHandler = listener.delegateFailureAndWrap(
@@ -63,7 +70,7 @@ public interface DataExtractorFactory {
             }
             if (hasAggs == false) {
                 ScrollDataExtractorFactory.create(
-                    client,
+                    searchClient,
                     datafeed,
                     extraFilters,
                     job,
@@ -85,10 +92,10 @@ public interface DataExtractorFactory {
             if (isComposite) {
                 String[] indices = datafeed.getIndices().toArray(new String[0]);
                 AggregatedSearchRequestBuilder aggregatedSearchRequestBuilder = hasRollup
-                    ? RollupDataExtractorFactory.requestBuilder(client, indices)
-                    : AggregationDataExtractorFactory.requestBuilder(client, indices);
+                    ? RollupDataExtractorFactory.requestBuilder(searchClient, indices)
+                    : AggregationDataExtractorFactory.requestBuilder(searchClient, indices);
                 final DataExtractorFactory dataExtractorFactory = new CompositeAggregationDataExtractorFactory(
-                    client,
+                    searchClient,
                     datafeed,
                     extraFilters,
                     job,
@@ -106,7 +113,7 @@ public interface DataExtractorFactory {
 
             if (hasRollup) {
                 RollupDataExtractorFactory.create(
-                    client,
+                    searchClient,
                     datafeed,
                     extraFilters,
                     job,
@@ -117,7 +124,7 @@ public interface DataExtractorFactory {
                 );
             } else {
                 factoryHandler.onResponse(
-                    new AggregationDataExtractorFactory(client, datafeed, extraFilters, job, xContentRegistry, timingStatsReporter)
+                    new AggregationDataExtractorFactory(searchClient, datafeed, extraFilters, job, xContentRegistry, timingStatsReporter)
                 );
             }
         }, e -> {

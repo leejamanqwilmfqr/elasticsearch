@@ -156,7 +156,7 @@ abstract class AbstractAggregationDataExtractor implements DataExtractor {
         ActionRequestBuilder<SearchRequest, SearchResponse> searchRequestBuilder
     ) {
         SearchResponse searchResponse = ClientHelper.executeWithHeaders(
-            DataExtractorUtils.headersForCpsSearch(context.headers),
+            context.headers,
             ClientHelper.ML_ORIGIN,
             client,
             searchRequestBuilder::get
