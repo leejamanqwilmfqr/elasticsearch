@@ -72,7 +72,7 @@ import static java.util.Collections.unmodifiableList;
  * by subclassing this class then add an entry to {@link TestSuiteApiCheck} mapping the API
  * name(s) to the new class.
  */
-@TimeoutSuite(millis = 20 * TimeUnits.MINUTE) // to account for slow as hell VMs
+@TimeoutSuite(millis = 25 * TimeUnits.MINUTE) // to account for slow as hell VMs
 public class CcsCommonYamlTestSuiteIT extends ESClientYamlSuiteTestCase {
 
     private static final Logger logger = LogManager.getLogger(CcsCommonYamlTestSuiteIT.class);
@@ -393,8 +393,10 @@ public class CcsCommonYamlTestSuiteIT extends ESClientYamlSuiteTestCase {
 
         // we overwrite this method so the search client can modify the index names by prefixing them with the
         // remote cluster name before sending the requests
+        @Override
         public ClientYamlTestResponse callApi(
             String apiName,
+            String method,
             Map<String, String> params,
             HttpEntity entity,
             Map<String, String> headers,
@@ -420,7 +422,7 @@ public class CcsCommonYamlTestSuiteIT extends ESClientYamlSuiteTestCase {
                 }
                 params.put(parameterName, String.join(",", expandedIndices));
             }
-            return super.callApi(apiName, params, entity, headers, nodeSelector, pathPredicate);
+            return super.callApi(apiName, method, params, entity, headers, nodeSelector, pathPredicate);
         }
 
         private boolean shouldReplaceIndexWithRemote(String apiName) {

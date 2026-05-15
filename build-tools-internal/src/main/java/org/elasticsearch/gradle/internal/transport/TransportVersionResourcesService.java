@@ -164,11 +164,14 @@ public abstract class TransportVersionResourcesService implements BuildService<T
             definition.ids().stream().map(Object::toString).collect(Collectors.joining(",")) + "\n",
             StandardCharsets.UTF_8
         );
+        gitCommand("add", path.toString());
     }
 
     void deleteReferableDefinition(String name) throws IOException {
         Path path = transportResourcesDir.resolve(getDefinitionRelativePath(name, true));
-        Files.deleteIfExists(path);
+        if (Files.deleteIfExists(path)) {
+            gitCommand("rm", "--ignore-unmatch", path.toString());
+        }
     }
 
     /** Return all unreferable definitions, mapped by their name. */
@@ -241,14 +244,12 @@ public abstract class TransportVersionResourcesService implements BuildService<T
     }
 
     /** Write the given upper bound to a file in the transport resources */
-    void writeUpperBound(TransportVersionUpperBound upperBound, boolean stageInGit) throws IOException {
+    void writeUpperBound(TransportVersionUpperBound upperBound) throws IOException {
         Path path = transportResourcesDir.resolve(getUpperBoundRelativePath(upperBound.name()));
         logger.debug("Writing upper bound [" + upperBound + "] to [" + path + "]");
         Files.writeString(path, upperBound.definitionName() + "," + upperBound.definitionId().complete() + "\n", StandardCharsets.UTF_8);
 
-        if (stageInGit) {
-            gitCommand("add", path.toString());
-        }
+        gitCommand("add", path.toString());
     }
 
     /** Return the path within the repository of the given latest */
@@ -292,6 +293,8 @@ public abstract class TransportVersionResourcesService implements BuildService<T
                 String refName;
                 if (refExists("MERGE_HEAD")) {
                     refName = gitCommand("rev-parse", "--verify", "MERGE_HEAD").strip();
+                } else if (refExists("CHERRY_PICK_HEAD")) {
+                    refName = gitCommand("rev-parse", "--verify", "CHERRY_PICK_HEAD").strip();
                 } else {
                     String upstreamRef = findUpstreamRef();
                     refName = gitCommand("merge-base", upstreamRef, "HEAD").strip();

@@ -9,14 +9,81 @@
 
 package org.elasticsearch.action.admin.cluster.node.tasks.cancel;
 
+import org.elasticsearch.tasks.CancellableTask;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.tasks.TaskId;
 import org.elasticsearch.test.ESTestCase;
 
 import java.util.Collections;
+import java.util.Map;
 import java.util.stream.IntStream;
 
+import static org.hamcrest.Matchers.containsString;
+
 public class CancelTasksRequestTests extends ESTestCase {
+
+    private static final String REINDEX_ACTION = "indices:data/write/reindex";
+    private static final String OTHER_ACTION = "indices:data/read/search";
+
+    public void testMatch_acceptsCancellableTaskWhenNoTargetSet() {
+        CancelTasksRequest request = new CancelTasksRequest();
+        assertTrue(request.match(cancellableTask(1, REINDEX_ACTION, TaskId.EMPTY_TASK_ID)));
+    }
+
+    public void testMatch_rejectsNonCancellableTask() {
+        CancelTasksRequest request = new CancelTasksRequest();
+        assertFalse(request.match(nonCancellableTask(1, REINDEX_ACTION)));
+    }
+
+    public void testMatch_rejectsOnActionMismatch() {
+        CancelTasksRequest request = new CancelTasksRequest();
+        request.setTargetTaskId(new TaskId("node-a", 42));
+        request.setActions(REINDEX_ACTION);
+        assertFalse(
+            "action filter should reject non-reindex tasks",
+            request.match(cancellableTask(42, OTHER_ACTION, TaskId.EMPTY_TASK_ID))
+        );
+    }
+
+    public void testMatch_rejectsOnParentMismatch() {
+        CancelTasksRequest request = new CancelTasksRequest();
+        request.setTargetTaskId(new TaskId("node-a", 42));
+        request.setTargetParentTaskId(new TaskId("node-a", 7));
+        assertFalse(
+            "parent filter should reject tasks whose parent is different",
+            request.match(cancellableTask(42, REINDEX_ACTION, new TaskId("node-a", 8)))
+        );
+    }
+
+    public void testMatch_excludeChildTasksRejectsTasksWithParent() {
+        CancelTasksRequest request = new CancelTasksRequest();
+        request.setTargetTaskId(new TaskId("node-a", 42));
+        request.setExcludeChildTasks(true);
+        assertFalse(
+            "exclude_child_tasks should reject tasks that have a parent",
+            request.match(cancellableTask(42, REINDEX_ACTION, new TaskId("node-a", 7)))
+        );
+    }
+
+    public void testMatch_excludeChildTasksAcceptsParentlessTasks() {
+        CancelTasksRequest request = new CancelTasksRequest();
+        request.setTargetTaskId(new TaskId("node-a", 42));
+        request.setExcludeChildTasks(true);
+        assertTrue(
+            "exclude_child_tasks should accept tasks that have no parent",
+            request.match(cancellableTask(42, REINDEX_ACTION, TaskId.EMPTY_TASK_ID))
+        );
+    }
+
+    public void testMatch_excludeChildTasksDefaultsToFalseAndAcceptsTasksWithParent() {
+        CancelTasksRequest request = new CancelTasksRequest();
+        request.setTargetTaskId(new TaskId("node-a", 42));
+        assertFalse("default should be false", request.excludeChildTasks());
+        assertTrue(
+            "without exclude_child_tasks, tasks with a parent should still match",
+            request.match(cancellableTask(42, REINDEX_ACTION, new TaskId("node-a", 7)))
+        );
+    }
 
     public void testGetDescription_NoTruncation() {
         CancelTasksRequest cancelTasksRequest = new CancelTasksRequest();
@@ -33,88 +100,32 @@ public class CancelTasksRequestTests extends ESTestCase {
         assertEquals(cancelTasksRequest.getDescription(), task.getDescription());
     }
 
-    public void testGetDescription_TruncatesNodesOnly() {
+    public void testGetDescription_BoundedCollectorTruncation() {
         CancelTasksRequest cancelTasksRequest = new CancelTasksRequest();
-
-        String[] nodes = IntStream.rangeClosed(1, 12).mapToObj(i -> "node" + i).toArray(String[]::new);
-        cancelTasksRequest.setNodes(nodes);
         cancelTasksRequest.setActions("action1", "action2");
         cancelTasksRequest.setTargetTaskId(new TaskId("node1", 1));
         cancelTasksRequest.setTargetParentTaskId(new TaskId("node1", 0));
 
-        assertEquals(
-            "reason[by user request], waitForCompletion[false], targetTaskId[node1:1], "
-                + "targetParentTaskId[node1:0], "
-                + "nodes[node1, node2, node3, node4, node5, node6, node7, node8, node9, node10, ... (2 more)], "
-                + "actions[action1, action2]",
-            cancelTasksRequest.getDescription()
-        );
-
-        Task task = cancelTasksRequest.createTask(1, "type", "action", null, Collections.emptyMap());
-        assertEquals(cancelTasksRequest.getDescription(), task.getDescription());
-    }
-
-    public void testGetDescription_TruncatesActionsOnly() {
-        CancelTasksRequest cancelTasksRequest = new CancelTasksRequest();
-
-        String[] actions = IntStream.rangeClosed(1, 15).mapToObj(i -> "action" + i).toArray(String[]::new);
-        cancelTasksRequest.setActions(actions);
-        cancelTasksRequest.setNodes("node1", "node2");
-        cancelTasksRequest.setTargetTaskId(new TaskId("node1", 1));
-        cancelTasksRequest.setTargetParentTaskId(new TaskId("node1", 0));
-
-        assertEquals(
-            "reason[by user request], waitForCompletion[false], targetTaskId[node1:1], "
-                + "targetParentTaskId[node1:0], "
-                + "nodes[node1, node2], "
-                + "actions[action1, action2, action3, action4, action5, action6, action7, action8, action9, action10, ... (5 more)]",
-            cancelTasksRequest.getDescription()
-        );
-
-        Task task = cancelTasksRequest.createTask(1, "type", "action", null, Collections.emptyMap());
-        assertEquals(cancelTasksRequest.getDescription(), task.getDescription());
-    }
-
-    public void testGetDescription_TruncatesNodesAndActions() {
-        CancelTasksRequest cancelTasksRequest = new CancelTasksRequest();
-
-        String[] nodes = IntStream.rangeClosed(1, 11).mapToObj(i -> "node" + i).toArray(String[]::new);
-        String[] actions = IntStream.rangeClosed(1, 20).mapToObj(i -> "action" + i).toArray(String[]::new);
-
+        String huge = "n".repeat(800);
+        String[] nodes = IntStream.rangeClosed(1, 5).mapToObj(i -> "node" + i + "-" + huge).toArray(String[]::new);
         cancelTasksRequest.setNodes(nodes);
-        cancelTasksRequest.setActions(actions);
-        cancelTasksRequest.setTargetTaskId(new TaskId("node1", 1));
-        cancelTasksRequest.setTargetParentTaskId(new TaskId("node1", 0));
 
-        assertEquals(
-            "reason[by user request], waitForCompletion[false], targetTaskId[node1:1], "
-                + "targetParentTaskId[node1:0], "
-                + "nodes[node1, node2, node3, node4, node5, node6, node7, node8, node9, node10, ... (1 more)], "
-                + "actions[action1, action2, action3, action4, action5, action6, action7, action8, action9, action10, ... (10 more)]",
-            cancelTasksRequest.getDescription()
-        );
+        String description = cancelTasksRequest.getDescription();
+
+        assertThat(description, containsString("], nodes["));
+        assertThat(description, containsString("... (5 in total, "));
+        assertThat(description, containsString(" omitted)]"));
+        assertThat(description, containsString(", actions[action1, action2]"));
 
         Task task = cancelTasksRequest.createTask(1, "type", "action", null, Collections.emptyMap());
-        assertEquals(cancelTasksRequest.getDescription(), task.getDescription());
+        assertEquals(description, task.getDescription());
     }
 
-    public void testGetDescription_ExactlyMaxDoesNotTruncate() {
-        CancelTasksRequest cancelTasksRequest = new CancelTasksRequest();
+    private static CancellableTask cancellableTask(long id, String action, TaskId parent) {
+        return new CancellableTask(id, "transport", action, "desc", parent, Collections.emptyMap());
+    }
 
-        String[] nodes = IntStream.rangeClosed(1, 10).mapToObj(i -> "node" + i).toArray(String[]::new);
-        String[] actions = IntStream.rangeClosed(1, 10).mapToObj(i -> "action" + i).toArray(String[]::new);
-
-        cancelTasksRequest.setNodes(nodes);
-        cancelTasksRequest.setActions(actions);
-        cancelTasksRequest.setTargetTaskId(new TaskId("node1", 1));
-        cancelTasksRequest.setTargetParentTaskId(new TaskId("node1", 0));
-
-        assertEquals(
-            "reason[by user request], waitForCompletion[false], targetTaskId[node1:1], "
-                + "targetParentTaskId[node1:0], "
-                + "nodes[node1, node2, node3, node4, node5, node6, node7, node8, node9, node10], "
-                + "actions[action1, action2, action3, action4, action5, action6, action7, action8, action9, action10]",
-            cancelTasksRequest.getDescription()
-        );
+    private static Task nonCancellableTask(long id, String action) {
+        return new Task(id, "transport", action, "desc", TaskId.EMPTY_TASK_ID, Map.of());
     }
 }

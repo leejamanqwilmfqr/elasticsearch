@@ -350,7 +350,7 @@ public class TextFieldTypeTests extends FieldTypeTestCase {
         );
 
         // when
-        var context = mock(MappedFieldType.BlockLoaderContext.class);
+        var context = mockContext();
         when(context.indexSettings()).thenReturn(indexSettings);
         BlockLoader blockLoader = ft.blockLoader(context);
 
@@ -400,7 +400,7 @@ public class TextFieldTypeTests extends FieldTypeTestCase {
         );
 
         // when
-        var context = mock(MappedFieldType.BlockLoaderContext.class);
+        var context = mockContext();
         when(context.indexSettings()).thenReturn(indexSettings);
         BlockLoader blockLoader = ft.blockLoader(context);
 
@@ -495,7 +495,7 @@ public class TextFieldTypeTests extends FieldTypeTestCase {
         TextFieldType ft = new TextFieldType("field", true, false, keywordDelegate);
 
         // when
-        var context = mock(MappedFieldType.BlockLoaderContext.class);
+        var context = mockContext();
         BlockLoader blockLoader = ft.blockLoader(context);
 
         // then
@@ -517,7 +517,7 @@ public class TextFieldTypeTests extends FieldTypeTestCase {
         var mockedSearchLookup = mock(SearchLookup.class);
         when(mockedSearchLookup.fieldType(parentFieldName)).thenReturn(parentKeywordType);
 
-        var context = mock(MappedFieldType.BlockLoaderContext.class);
+        var context = mockContext();
         when(context.parentField(childFieldName)).thenReturn(parentFieldName);
         when(context.lookup()).thenReturn(mockedSearchLookup);
 
@@ -552,7 +552,8 @@ public class TextFieldTypeTests extends FieldTypeTestCase {
             false,
             IndexVersions.KEYWORD_MULTI_FIELDS_NOT_STORED_WHEN_IGNORED,
             true,
-            false
+            false,
+            null
         );
 
         // when
@@ -592,7 +593,8 @@ public class TextFieldTypeTests extends FieldTypeTestCase {
             false,
             legacyVersion,
             false,
-            false
+            false,
+            null
         );
 
         // when
@@ -631,7 +633,8 @@ public class TextFieldTypeTests extends FieldTypeTestCase {
             false,
             legacyVersion,
             true,
-            false
+            false,
+            null
         );
 
         // when
@@ -660,11 +663,12 @@ public class TextFieldTypeTests extends FieldTypeTestCase {
             false,
             IndexVersion.current(),
             false,
-            false
+            false,
+            null
         );
 
         // when
-        var context = mock(MappedFieldType.BlockLoaderContext.class);
+        var context = mockContext();
         when(context.parentField("field")).thenReturn(null);
         BlockLoader blockLoader = ft.blockLoader(context);
 
@@ -688,7 +692,8 @@ public class TextFieldTypeTests extends FieldTypeTestCase {
             false,
             IndexVersion.current(),
             false,
-            true
+            true,
+            null
         );
 
         // when
@@ -698,6 +703,12 @@ public class TextFieldTypeTests extends FieldTypeTestCase {
 
         // then
         assertThat(blockLoader, instanceOf(BytesRefsFromBinaryMultiSeparateCountBlockLoader.class));
+    }
+
+    private static MappedFieldType.BlockLoaderContext mockContext() {
+        MappedFieldType.BlockLoaderContext context = mock(MappedFieldType.BlockLoaderContext.class);
+        when(context.ordinalsByteSize()).thenReturn(MappedFieldType.BlockLoaderContext.DEFAULT_ORDINALS_BYTE_SIZE);
+        return context;
     }
 
 }

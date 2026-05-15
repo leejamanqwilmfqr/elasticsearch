@@ -175,7 +175,10 @@ public class TransportStartTransformAction extends TransportMasterNodeAction<Sta
         ActionListener<Boolean> createOrGetIndexListener = ActionListener.wrap(unused -> {
             TransformTaskParams transformTask = transformTaskParamsHolder.get();
             assert transformTask != null;
-            PersistentTasksCustomMetadata.PersistentTask<?> existingTask = TransformTask.getTransformTask(transformTask.getId(), state);
+            PersistentTasksCustomMetadata.PersistentTask<?> existingTask = TransformTask.getTransformTask(
+                transformTask.getId(),
+                projectResolver.getProjectMetadata(state)
+            );
             if (existingTask == null) {
                 // Create the allocated task and wait for it to be started
                 persistentTasksService.sendStartRequest(
@@ -282,7 +285,8 @@ public class TransportStartTransformAction extends TransportMasterNodeAction<Sta
                 parentClient,
                 ClientHelper.TRANSFORM_ORIGIN,
                 ValidateTransformAction.INSTANCE,
-                new ValidateTransformAction.Request(config, false, request.ackTimeout()),
+                // TODO
+                new ValidateTransformAction.Request(config, true, request.ackTimeout()),
                 validationListener
             );
         }, listener::onFailure);

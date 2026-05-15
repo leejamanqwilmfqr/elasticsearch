@@ -24,7 +24,7 @@ public class PlanTelemetry {
     private final Map<String, Integer> commands = new HashMap<>();
     private final Map<String, Integer> functions = new HashMap<>();
     private final Map<String, Integer> settings = new HashMap<>();
-    private int linkedProjectsCount = 0;
+    private Integer linkedProjectsCount = null;
 
     public PlanTelemetry(EsqlFunctionRegistry functionRegistry) {
         this.functionRegistry = functionRegistry;
@@ -34,11 +34,15 @@ public class PlanTelemetry {
         map.compute(key.toUpperCase(Locale.ROOT), (k, count) -> count == null ? 1 : count + 1);
     }
 
+    public EsqlFunctionRegistry functionRegistry() {
+        return functionRegistry;
+    }
+
     public void linkedProjectsCount(int linkedProjectsCount) {
         this.linkedProjectsCount = linkedProjectsCount;
     }
 
-    public int linkedProjectsCount() {
+    public Integer linkedProjectsCount() {
         return linkedProjectsCount;
     }
 
