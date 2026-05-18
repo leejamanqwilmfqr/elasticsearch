@@ -19,6 +19,7 @@ import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.core.CheckedConsumer;
 import org.elasticsearch.core.Nullable;
+import org.elasticsearch.core.Tuple;
 import org.elasticsearch.index.IndexNotFoundException;
 import org.elasticsearch.license.RemoteClusterLicenseChecker;
 import org.elasticsearch.persistent.PersistentTasksCustomMetadata;
@@ -182,7 +183,7 @@ public final class DatafeedManager {
                 }
             });
         } else {
-            // Check if this is a CPS datafeed even without security (e.g. for testing)
+            // CPS without ES security: serverless internal deployments. Mint the key but skip privilege checks.
             if (crossProjectModeDecider.crossProjectEnabled()
                 && credentialManager().hasCloudManagedCredential(threadPool.getThreadContext())) {
                 grantCpsKeyAndPutDatafeed(request, state, threadPool, null, listener);
@@ -295,9 +296,14 @@ public final class DatafeedManager {
      * Grants a new cloud internal API key, applies the datafeed update, persists the new credential in the same write,
      * and best-effort revokes the old key if one existed (re-key case).
      *
-     * @implNote Synchronous credential extraction runs inside the caller's {@code useSecondaryAuthIfAvailable} block
-     *           (see {@link #updateDatafeed}). The grant callback runs asynchronously and must re-enter secondary auth
-     *           so cloud-managed credentials are still visible in {@link org.elasticsearch.common.util.concurrent.ThreadContext}.
+     * @implNote Synchronous credential extraction and {@code grantCloudAuthentication} run inside
+     *           {@link #mintCpsKeyForDatafeed}, which applies {@code useSecondaryAuthIfAvailable} so secondary auth is
+     *           honored. The grant callback runs asynchronously and re-enters secondary auth before persisting.
+     *           <p>
+     *           This operation is NOT idempotent. If the caller retries after the mint succeeds but before this
+     *           method's listener resolves, a second key will be granted and the first becomes orphaned. With the
+     *           revoke primitive unavailable (see TODOs in {@link #bestEffortRevokeOldKey} and {@link #revokeKeyOnFailure}),
+     *           each retry leaks one cloud API key. Tracked in beads issue elastic-workspace-rqpf.
      */
     private void applyCpsUpdateWithRekey(
         UpdateDatafeedAction.Request request,
@@ -307,36 +313,32 @@ public final class DatafeedManager {
         ActionListener<PutDatafeedAction.Response> listener
     ) {
         String datafeedId = request.getUpdate().getId();
-        CloudCredential callerCredential = credentialManager().extractCloudManagedCredential(threadPool.getThreadContext());
-        Map<String, String> userHeaders = threadPool.getThreadContext().getHeaders();
+        mintCpsKeyForDatafeed(datafeedId, threadPool, securityContext, listener, (newCredential, userHeaders) -> {
+            logger.info("[{}] Minted internal cloud API key for CPS datafeed update (re-key)", datafeedId);
+            ActionListener<PutDatafeedAction.Response> guardedListener = revokeKeyOnFailure(newCredential.id(), datafeedId, listener);
+            datafeedConfigProvider.updateDatefeedConfig(
+                datafeedId,
+                request.getUpdate(),
+                userHeaders,
+                newCredential,
+                wrappedValidator,
+                guardedListener.delegateFailureAndWrap((l, tuple) -> finalizeRekey(datafeedId, tuple, l))
+            );
+        });
+    }
 
-        apiKeyService().grantCloudAuthentication(callerCredential, "datafeed:" + datafeedId, ActionListener.wrap(result -> {
-            useSecondaryAuthIfAvailable(securityContext, () -> {
-                logger.info("[{}] Minted internal cloud API key for CPS datafeed update (re-key)", datafeedId);
-
-                PersistedCloudCredential newCredential = result.persistedCredential();
-
-                // Wrap listener to best-effort revoke the newly minted key if downstream operations fail
-                ActionListener<PutDatafeedAction.Response> guardedListener = revokeKeyOnFailure(newCredential.id(), datafeedId, listener);
-
-                datafeedConfigProvider.updateDatefeedConfig(
-                    datafeedId,
-                    request.getUpdate(),
-                    userHeaders,
-                    newCredential,
-                    wrappedValidator,
-                    guardedListener.delegateFailureAndWrap((l, tuple) -> {
-                        DatafeedConfig updatedConfig = tuple.v1();
-                        PersistedCloudCredential oldCredential = tuple.v2();
-                        if (oldCredential != null) {
-                            bestEffortRevokeOldKey(datafeedId, oldCredential, updatedConfig, l);
-                        } else {
-                            l.onResponse(new PutDatafeedAction.Response(updatedConfig));
-                        }
-                    })
-                );
-            });
-        }, listener::onFailure));
+    private void finalizeRekey(
+        String datafeedId,
+        Tuple<DatafeedConfig, PersistedCloudCredential> tuple,
+        ActionListener<PutDatafeedAction.Response> listener
+    ) {
+        DatafeedConfig updatedConfig = tuple.v1();
+        PersistedCloudCredential oldCredential = tuple.v2();
+        if (oldCredential != null) {
+            bestEffortRevokeOldKey(datafeedId, oldCredential, updatedConfig, listener);
+        } else {
+            listener.onResponse(new PutDatafeedAction.Response(updatedConfig));
+        }
     }
 
     /**
@@ -349,7 +351,7 @@ public final class DatafeedManager {
         ActionListener<PutDatafeedAction.Response> listener
     ) {
         // TODO: invoke InternalCloudApiKeyService.revokeCloudApiKey once the revoke primitive is available
-        // (tracked in beads issue elastic-workspace-3kf)
+        // (tracked in beads issue elastic-workspace-rqpf)
         logger.warn(
             "[{}] Skipping revocation of old cloud API key [{}] — revoke primitive not yet available",
             datafeedId,
@@ -372,31 +374,25 @@ public final class DatafeedManager {
 
         datafeedConfigProvider.getDatafeedConfig(datafeedId, null, listener.delegateFailureAndWrap((delegate, datafeedConfigBuilder) -> {
             DatafeedConfig datafeedConfig = datafeedConfigBuilder.build();
-            String jobId = datafeedConfig.getJobId();
-
-            // Revoke internal API key if this is a CPS datafeed (best-effort, don't block deletion)
-            Runnable proceedWithDeletion = () -> {
-                JobDataDeleter jobDataDeleter = new JobDataDeleter(client, jobId);
-                jobDataDeleter.deleteDatafeedTimingStats(
-                    delegate.delegateFailureAndWrap(
-                        (l, unused1) -> datafeedConfigProvider.deleteDatafeedConfig(
-                            datafeedId,
-                            l.delegateFailureAndWrap((ll, unused2) -> ll.onResponse(AcknowledgedResponse.TRUE))
-                        )
-                    )
-                );
-            };
-
-            if (datafeedConfig.getCloudInternalCredential() != null) {
+            PersistedCloudCredential cred = datafeedConfig.getCloudInternalCredential();
+            if (cred != null) {
                 // TODO: invoke InternalCloudApiKeyService.revokeCloudApiKey once the revoke primitive is available
-                // (tracked in beads issue elastic-workspace-3kf)
+                // (tracked in beads issue elastic-workspace-rqpf)
                 logger.warn(
                     "[{}] Skipping revocation of cloud API key [{}] on deletion — revoke primitive not yet available",
                     datafeedId,
-                    datafeedConfig.getCloudInternalCredential().id()
+                    cred.id()
                 );
             }
-            proceedWithDeletion.run();
+            JobDataDeleter jobDataDeleter = new JobDataDeleter(client, datafeedConfig.getJobId());
+            jobDataDeleter.deleteDatafeedTimingStats(
+                delegate.delegateFailureAndWrap(
+                    (l, unused1) -> datafeedConfigProvider.deleteDatafeedConfig(
+                        datafeedId,
+                        l.delegateFailureAndWrap((ll, unused2) -> ll.onResponse(AcknowledgedResponse.TRUE))
+                    )
+                )
+            );
         }));
 
     }
@@ -454,6 +450,10 @@ public final class DatafeedManager {
      *                        {@link org.elasticsearch.xpack.ml.utils.SecondaryAuthorizationUtils#useSecondaryAuthIfAvailable}
      *                        so {@link org.elasticsearch.xpack.core.security.cloud.CloudCredentialManager} sees secondary-authenticated
      *                        headers after async privilege checks.
+     * @implNote This operation is NOT idempotent. If the caller retries after the mint succeeds but before this
+     *           method's listener resolves, a second key will be granted and the first becomes orphaned. With the
+     *           revoke primitive unavailable (see TODOs in {@link #bestEffortRevokeOldKey} and {@link #revokeKeyOnFailure}),
+     *           each retry leaks one cloud API key. Tracked in beads issue elastic-workspace-rqpf.
      */
     private void grantCpsKeyAndPutDatafeed(
         PutDatafeedAction.Request request,
@@ -462,31 +462,45 @@ public final class DatafeedManager {
         @Nullable SecurityContext securityContext,
         ActionListener<PutDatafeedAction.Response> listener
     ) {
-        useSecondaryAuthIfAvailable(securityContext, () -> {
-            String datafeedId = request.getDatafeed().getId();
-            logger.info("[{}] CPS-enabled datafeed creation detected; minting internal cloud API key", datafeedId);
+        String datafeedId = request.getDatafeed().getId();
+        logger.info("[{}] CPS-enabled datafeed creation detected; minting internal cloud API key", datafeedId);
+        mintCpsKeyForDatafeed(datafeedId, threadPool, securityContext, listener, (newCredential, userHeaders) -> {
+            DatafeedConfig.Builder builder = new DatafeedConfig.Builder(request.getDatafeed());
+            builder.setCloudInternalCredential(newCredential);
+            PutDatafeedAction.Request updatedRequest = new PutDatafeedAction.Request(builder.build());
+            updatedRequest.masterNodeTimeout(request.masterNodeTimeout());
+            putDatafeed(updatedRequest, userHeaders, clusterState, revokeKeyOnFailure(newCredential.id(), datafeedId, listener));
+        });
+    }
 
+    /**
+     * Extracts the caller's cloud credential, mints an internal API key for the datafeed, then runs {@code onSuccess}
+     * under secondary auth (see {@link org.elasticsearch.xpack.ml.utils.SecondaryAuthorizationUtils#useSecondaryAuthIfAvailable}).
+     */
+    private void mintCpsKeyForDatafeed(
+        String datafeedId,
+        ThreadPool threadPool,
+        @Nullable SecurityContext securityContext,
+        ActionListener<?> failurePropagator,
+        BiConsumer<PersistedCloudCredential, Map<String, String>> onSuccess
+    ) {
+        useSecondaryAuthIfAvailable(securityContext, () -> {
             CloudCredential callerCredential = credentialManager().extractCloudManagedCredential(threadPool.getThreadContext());
             Map<String, String> userHeaders = threadPool.getThreadContext().getHeaders();
-
-            apiKeyService().grantCloudAuthentication(callerCredential, "datafeed:" + datafeedId, ActionListener.wrap(result -> {
-                useSecondaryAuthIfAvailable(securityContext, () -> {
-                    DatafeedConfig.Builder builder = new DatafeedConfig.Builder(request.getDatafeed());
-                    builder.setCloudInternalCredential(result.persistedCredential());
-                    PutDatafeedAction.Request updatedRequest = new PutDatafeedAction.Request(builder.build());
-                    updatedRequest.masterNodeTimeout(request.masterNodeTimeout());
-                    // Wrap listener to best-effort revoke the newly minted key if downstream operations fail
-                    putDatafeed(
-                        updatedRequest,
-                        userHeaders,
-                        clusterState,
-                        revokeKeyOnFailure(result.persistedCredential().id(), datafeedId, listener)
-                    );
-                });
-            }, e -> {
-                logger.error(() -> "[" + datafeedId + "] Failed to create internal cloud API key for CPS datafeed", e);
-                listener.onFailure(e);
-            }));
+            apiKeyService().grantCloudAuthentication(
+                callerCredential,
+                "datafeed:" + datafeedId,
+                ActionListener.wrap(
+                    result -> useSecondaryAuthIfAvailable(
+                        securityContext,
+                        () -> onSuccess.accept(result.persistedCredential(), userHeaders)
+                    ),
+                    e -> {
+                        logger.error(() -> "[" + datafeedId + "] Failed to mint internal cloud API key for CPS datafeed", e);
+                        failurePropagator.onFailure(e);
+                    }
+                )
+            );
         });
     }
 
@@ -498,7 +512,7 @@ public final class DatafeedManager {
     private <T> ActionListener<T> revokeKeyOnFailure(String apiKeyId, String datafeedId, ActionListener<T> delegate) {
         return ActionListener.wrap(delegate::onResponse, e -> {
             // TODO: invoke InternalCloudApiKeyService.revokeCloudApiKey once the revoke primitive is available
-            // (tracked in beads issue elastic-workspace-3kf)
+            // (tracked in beads issue elastic-workspace-rqpf)
             logger.warn("[{}] Downstream operation failed after CPS key creation; skipping revocation of key [{}]", datafeedId, apiKeyId);
             delegate.onFailure(e);
         });
