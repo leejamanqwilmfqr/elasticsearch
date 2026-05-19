@@ -207,14 +207,7 @@ public final class DatafeedManager {
                 }
             });
         } else {
-            // CPS without ES security: serverless internal deployments. Mint the key but skip privilege checks.
-            if (crossProjectMlEnabled()
-                && credentialManager().hasCloudManagedCredential(threadPool.getThreadContext())
-                && datafeedNeedsCloudInternalCredential(request.getDatafeed())) {
-                grantCpsKeyAndPutDatafeed(request, state, threadPool, null, listener);
-            } else {
-                putDatafeed(request, threadPool.getThreadContext().getHeaders(), state, listener);
-            }
+            putDatafeed(request, threadPool.getThreadContext().getHeaders(), state, listener);
         }
     }
 

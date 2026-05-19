@@ -1084,10 +1084,8 @@ public class DatafeedConfigTests extends AbstractBWCSerializationTestCase<Datafe
     @Override
     protected DatafeedConfig mutateInstanceForVersion(DatafeedConfig instance, TransportVersion version) {
         DatafeedConfig.Builder builder = new DatafeedConfig.Builder(instance);
-        if (version.supports(DatafeedConfig.DATAFEED_PROJECT_ROUTING) == false) {
+        if (version.supports(DatafeedConfig.DATAFEED_CROSS_PROJECT_FIELDS) == false) {
             builder.setProjectRouting(null);
-        }
-        if (version.supports(DatafeedConfig.DATAFEED_CLOUD_INTERNAL_CREDENTIAL) == false) {
             builder.setCloudInternalCredential(null);
         }
         return builder.build();

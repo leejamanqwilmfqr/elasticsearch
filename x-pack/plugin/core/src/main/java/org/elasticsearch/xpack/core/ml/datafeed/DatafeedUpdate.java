@@ -171,7 +171,7 @@ public class DatafeedUpdate implements Writeable, ToXContentObject {
         maxEmptySearches = in.readOptionalInt();
         indicesOptions = in.readBoolean() ? IndicesOptions.readIndicesOptions(in) : null;
         this.runtimeMappings = in.readBoolean() ? in.readGenericMap() : null;
-        projectRouting = in.getTransportVersion().supports(DatafeedConfig.DATAFEED_PROJECT_ROUTING) ? in.readOptionalString() : null;
+        projectRouting = in.getTransportVersion().supports(DatafeedConfig.DATAFEED_CROSS_PROJECT_FIELDS) ? in.readOptionalString() : null;
     }
 
     /**
@@ -219,7 +219,7 @@ public class DatafeedUpdate implements Writeable, ToXContentObject {
         } else {
             out.writeBoolean(false);
         }
-        if (out.getTransportVersion().supports(DatafeedConfig.DATAFEED_PROJECT_ROUTING)) {
+        if (out.getTransportVersion().supports(DatafeedConfig.DATAFEED_CROSS_PROJECT_FIELDS)) {
             out.writeOptionalString(projectRouting);
         }
     }

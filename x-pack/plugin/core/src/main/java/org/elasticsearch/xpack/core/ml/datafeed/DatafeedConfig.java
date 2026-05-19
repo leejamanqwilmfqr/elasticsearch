@@ -118,9 +118,7 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
 
     public static final FeatureFlag DATAFEED_CROSS_PROJECT = new FeatureFlag("datafeed_cross_project");
 
-    static final TransportVersion DATAFEED_PROJECT_ROUTING = TransportVersion.fromName("datafeed_project_routing");
-
-    static final TransportVersion DATAFEED_CLOUD_INTERNAL_CREDENTIAL = TransportVersion.fromName("datafeed_cloud_internal_credential");
+    static final TransportVersion DATAFEED_CROSS_PROJECT_FIELDS = TransportVersion.fromName("datafeed_cross_project_fields");
 
     // Accessing `Job.ID` here causes an NPE in tests as a DatafeedConfig parser is referenced in the Job parser
     public static final ParseField JOB_ID = new ParseField("job_id");
@@ -345,14 +343,11 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
         maxEmptySearches = in.readOptionalVInt();
         indicesOptions = IndicesOptions.readIndicesOptions(in);
         runtimeMappings = in.readGenericMap();
-        if (in.getTransportVersion().supports(DATAFEED_PROJECT_ROUTING)) {
+        if (in.getTransportVersion().supports(DATAFEED_CROSS_PROJECT_FIELDS)) {
             this.projectRouting = in.readOptionalString();
-        } else {
-            this.projectRouting = null;
-        }
-        if (in.getTransportVersion().supports(DATAFEED_CLOUD_INTERNAL_CREDENTIAL)) {
             this.cloudInternalCredential = in.readOptionalWriteable(PersistedCloudCredential::new);
         } else {
+            this.projectRouting = null;
             this.cloudInternalCredential = null;
         }
     }
@@ -665,10 +660,8 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
         out.writeOptionalVInt(maxEmptySearches);
         indicesOptions.writeIndicesOptions(out);
         out.writeGenericMap(runtimeMappings);
-        if (out.getTransportVersion().supports(DATAFEED_PROJECT_ROUTING)) {
+        if (out.getTransportVersion().supports(DATAFEED_CROSS_PROJECT_FIELDS)) {
             out.writeOptionalString(projectRouting);
-        }
-        if (out.getTransportVersion().supports(DATAFEED_CLOUD_INTERNAL_CREDENTIAL)) {
             out.writeOptionalWriteable(cloudInternalCredential);
         }
     }
@@ -963,10 +956,8 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
                 indicesOptions = IndicesOptions.readIndicesOptions(in);
             }
             runtimeMappings = in.readGenericMap();
-            if (in.getTransportVersion().supports(DATAFEED_PROJECT_ROUTING)) {
+            if (in.getTransportVersion().supports(DATAFEED_CROSS_PROJECT_FIELDS)) {
                 projectRouting = in.readOptionalString();
-            }
-            if (in.getTransportVersion().supports(DATAFEED_CLOUD_INTERNAL_CREDENTIAL)) {
                 cloudInternalCredential = in.readOptionalWriteable(PersistedCloudCredential::new);
             }
         }
@@ -1005,10 +996,8 @@ public class DatafeedConfig implements SimpleDiffable<DatafeedConfig>, ToXConten
                 indicesOptions.writeIndicesOptions(out);
             }
             out.writeGenericMap(runtimeMappings);
-            if (out.getTransportVersion().supports(DATAFEED_PROJECT_ROUTING)) {
+            if (out.getTransportVersion().supports(DATAFEED_CROSS_PROJECT_FIELDS)) {
                 out.writeOptionalString(projectRouting);
-            }
-            if (out.getTransportVersion().supports(DATAFEED_CLOUD_INTERNAL_CREDENTIAL)) {
                 out.writeOptionalWriteable(cloudInternalCredential);
             }
         }
